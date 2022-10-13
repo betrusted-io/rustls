@@ -725,12 +725,15 @@ impl State<ClientConnectionData> for ExpectServerDone {
         // 6. emit a Finished, our first encrypted message under the new keys.
 
         // 1.
+        debug!("verify cert chain");
         let (end_entity, intermediates) = st
             .server_cert
             .cert_chain
             .split_first()
             .ok_or(Error::NoCertificatesPresented)?;
+        debug!("get time");
         let now = std::time::SystemTime::now();
+        debug!("now: {:?}", now);
         let cert_verified = st
             .config
             .verifier
@@ -744,9 +747,11 @@ impl State<ClientConnectionData> for ExpectServerDone {
             )
             .map_err(|err| hs::send_cert_error_alert(cx.common, err))?;
 
+        debug!("cert_verified: {:?}", cert_verified);
         // 3.
         // Build up the contents of the signed message.
         // It's ClientHello.random || ServerHello.random || ServerKeyExchange.params
+        debug!("building a signed message");
         let sig_verified = {
             let mut message = Vec::new();
             message.extend_from_slice(&st.randoms.client);
@@ -754,9 +759,11 @@ impl State<ClientConnectionData> for ExpectServerDone {
             message.extend_from_slice(&st.server_kx.kx_params);
 
             // Check the signature is compatible with the ciphersuite.
+            debug!("built message: {:?}", message);
             let sig = &st.server_kx.kx_sig;
             if !SupportedCipherSuite::from(suite).usable_for_signature_algorithm(sig.scheme.sign())
             {
+                debug!("error at cipher suite: got {:?} expect {:?}", sig.scheme.sign(), suite.sign);
                 let error_message = format!(
                     "peer signed kx with wrong algorithm (got {:?} expect {:?})",
                     sig.scheme.sign(),
@@ -764,24 +771,28 @@ impl State<ClientConnectionData> for ExpectServerDone {
                 );
                 return Err(Error::PeerMisbehavedError(error_message));
             }
-
+            debug!("suite.sign: {:?}", suite.sign);
             st.config
                 .verifier
                 .verify_tls12_signature(&message, &st.server_cert.cert_chain[0], sig)
                 .map_err(|err| hs::send_cert_error_alert(cx.common, err))?
         };
+        debug!("message signed");
         cx.common.peer_certificates = Some(st.server_cert.cert_chain);
 
         // 4.
         if let Some(client_auth) = &st.client_auth {
+            debug!("sending our certificate");
             let certs = match client_auth {
                 ClientAuthDetails::Empty { .. } => Vec::new(),
                 ClientAuthDetails::Verify { certkey, .. } => certkey.cert.clone(),
             };
             emit_certificate(&mut st.transcript, certs, cx.common);
         }
+        debug!("after certificate send");
 
         // 5a.
+        debug!("completing key exchange");
         let ecdh_params =
             tls12::decode_ecdh_params::<ServerECDHParams>(cx.common, &st.server_kx.kx_params)?;
         let group =
@@ -790,9 +801,11 @@ impl State<ClientConnectionData> for ExpectServerDone {
                     Error::PeerMisbehavedError("peer chose an unsupported group".to_string())
                 })?;
         let kx = kx::KeyExchange::start(group).ok_or(Error::FailedToGetRandomBytes)?;
+        debug!("server ecdh params: {:?}", ecdh_params);
 
         // 5b.
         let mut transcript = st.transcript;
+        debug!("transcript hash sent");
         emit_clientkx(&mut transcript, cx.common, &kx.pubkey);
         // nb. EMS handshake hash only runs up to ClientKeyExchange.
         let ems_seed = st
@@ -800,14 +813,17 @@ impl State<ClientConnectionData> for ExpectServerDone {
             .then(|| transcript.get_current_hash());
 
         // 5c.
+        debug!("maybe emitting client auth verify");
         if let Some(ClientAuthDetails::Verify { signer, .. }) = &st.client_auth {
             emit_certverify(&mut transcript, signer.as_ref(), cx.common)?;
         }
 
         // 5d.
+        debug!("emit ccs");
         emit_ccs(cx.common);
 
         // 5e. Now commit secrets.
+        debug!("commit secrets");
         let secrets = ConnectionSecrets::from_key_exchange(
             kx,
             &ecdh_params.public.0,
@@ -828,6 +844,7 @@ impl State<ClientConnectionData> for ExpectServerDone {
             .start_encrypting();
 
         // 6.
+        debug!("emit finished");
         emit_finished(&secrets, &mut transcript, cx.common);
 
         if st.must_issue_new_ticket {

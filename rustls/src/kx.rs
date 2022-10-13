@@ -27,11 +27,15 @@ impl KeyExchange {
     ///
     /// This generates an ephemeral key pair and stores it in the returned KeyExchange object.
     pub(crate) fn start(skxg: &'static SupportedKxGroup) -> Option<Self> {
+        log::debug!("start key exchange");
         let rng = ring::rand::SystemRandom::new();
+        log::debug!("rng alloc");
         let ours =
             ring::agreement::EphemeralPrivateKey::generate(skxg.agreement_algorithm, &rng).ok()?;
+        log::debug!("our secret generated: {:?}", ours);
 
         let pubkey = ours.compute_public_key().ok()?;
+        log::debug!("our pubkey generated");
 
         Some(Self {
             skxg,

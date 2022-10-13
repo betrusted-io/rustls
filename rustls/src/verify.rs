@@ -337,8 +337,11 @@ impl ServerCertVerifier for WebPkiVerifier {
         ocsp_response: &[u8],
         now: SystemTime,
     ) -> Result<ServerCertVerified, Error> {
+        debug!("wepbki certificate verifier");
         let (cert, chain, trustroots) = prepare(end_entity, intermediates, &self.roots)?;
+        debug!("split cert");
         let webpki_now = webpki::Time::try_from(now).map_err(|_| Error::FailedToGetCurrentTime)?;
+        debug!("webpki_now: {:?}", webpki_now);
 
         let dns_name = match server_name {
             ServerName::DnsName(dns_name) => dns_name,
@@ -346,6 +349,7 @@ impl ServerCertVerifier for WebPkiVerifier {
                 return Err(Error::UnsupportedNameType);
             }
         };
+        debug!("dns_name: {:?}", dns_name);
 
         let cert = cert
             .verify_is_valid_tls_server_cert(
@@ -357,14 +361,18 @@ impl ServerCertVerifier for WebPkiVerifier {
             .map_err(pki_error)
             .map(|_| cert)?;
 
+        debug!("after crypto validation");
         if let Some(policy) = &self.ct_policy {
+            debug!("verifying cert transparency");
             policy.verify(end_entity, now, scts)?;
         }
 
+        debug!("checking ocsp_response");
         if !ocsp_response.is_empty() {
             trace!("Unvalidated OCSP response: {:?}", ocsp_response.to_vec());
         }
 
+        debug!("validating for dns_name: {:?}", dns_name.0.as_ref());
         cert.verify_is_valid_for_dns_name(dns_name.0.as_ref())
             .map_err(pki_error)
             .map(|_| ServerCertVerified::assertion())
